@@ -1,0 +1,526 @@
+// HR Nexus — MVP data model
+// 150 policy articles are represented by 150 PolicyDocument rows.
+// Each PolicyDocument has one or more PolicyVersion rows (1:N).
+// The article count is the count of PolicyDocument, never the count of versions.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  EMPLOYEE
+  HR_AGENT
+  ER_SPECIALIST
+  HR_ADMIN
+  AUDITOR
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  INACTIVE
+}
+
+enum QueueType {
+  GENERAL
+  HR
+  ER
+}
+
+enum Sensitivity {
+  PUBLIC
+  INTERNAL
+  CONFIDENTIAL
+  ER_RESTRICTED
+}
+
+enum TicketStatus {
+  NEW
+  TRIAGED
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_EMPLOYEE
+  WAITING_HR
+  ESCALATED
+  RESOLVED
+  CLOSED
+}
+
+enum Priority {
+  P1
+  P2
+  P3
+  P4
+}
+
+enum MessageSenderType {
+  EMPLOYEE
+  HR_AGENT
+  ER_SPECIALIST
+  AI
+  SYSTEM
+}
+
+enum MessageVisibility {
+  REQUESTER_AND_HR
+  HR_ONLY
+  ER_ONLY
+}
+
+enum PolicyStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum AudienceDimension {
+  ALL
+  DEPARTMENT
+  COUNTRY
+  EMPLOYMENT_TYPE
+  GRADE
+}
+
+enum SlaState {
+  ON_TRACK
+  AT_RISK
+  BREACHED
+  MET
+  PAUSED
+}
+
+enum SlaEventType {
+  STARTED
+  PAUSED
+  RESUMED
+  AT_RISK
+  BREACHED
+  MET
+  COMPLETED
+}
+
+enum EscalationLevel {
+  LEVEL_1
+  LEVEL_2
+}
+
+enum ResolutionType {
+  ANSWERED
+  RESOLVED_WITH_ACTION
+  REFERRED
+  REJECTED
+}
+
+enum AiRunKind {
+  CLASSIFY
+  ANSWER
+  CLARIFY
+}
+
+enum AiRunStatus {
+  SUCCESS
+  FALLBACK
+  FAILED
+}
+
+enum CitationValidation {
+  VALID
+  INVALID
+}
+
+model Department {
+  id        String   @id @db.Uuid
+  code      String   @unique
+  name      String
+  parentId  String?  @db.Uuid
+  createdAt DateTime @default(now())
+
+  parent    Department?      @relation("DepartmentTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children  Department[]     @relation("DepartmentTree")
+  employees Employee[]
+  policies  PolicyDocument[]
+
+  @@index([parentId])
+}
+
+model Employee {
+  id              String         @id @db.Uuid
+  employeeNo      String         @unique
+  email           String         @unique
+  firstName       String
+  lastName        String
+  role            Role           @default(EMPLOYEE)
+  status          EmployeeStatus @default(ACTIVE)
+  departmentId    String         @db.Uuid
+  queueId         String?        @db.Uuid
+  managerId       String?        @db.Uuid
+  locationCountry String
+  employmentType  String
+  grade           String
+  hireDate        DateTime       @db.Date
+  createdAt       DateTime       @default(now())
+
+  department       Department   @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  queue            Queue?       @relation(fields: [queueId], references: [id], onDelete: SetNull)
+  manager          Employee?    @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
+  reports          Employee[]   @relation("EmployeeManager")
+  requestedTickets Ticket[]     @relation("TicketRequester")
+  assignedTickets  Ticket[]     @relation("TicketAssignee")
+  sentMessages     Message[]    @relation("MessageSender")
+  assignmentsMade  Assignment[] @relation("AssignmentAssignee")
+  assignmentsGiven Assignment[] @relation("AssignmentAssigner")
+  resolutions      Resolution[]
+  escalations      Escalation[] @relation("EscalationTarget")
+
+  @@index([departmentId])
+  @@index([queueId])
+  @@index([role])
+  @@index([managerId])
+}
+
+model Queue {
+  id           String    @id @db.Uuid
+  slug         String    @unique
+  name         String
+  type         QueueType
+  isRestricted Boolean   @default(false)
+  description  String?
+  createdAt    DateTime  @default(now())
+
+  employees   Employee[]
+  tickets     Ticket[]
+  assignments Assignment[]
+  categories  Category[]
+}
+
+model Category {
+  id                 String   @id @db.Uuid
+  slug               String   @unique
+  name               String
+  defaultQueueId     String?  @db.Uuid
+  isSensitiveDefault Boolean  @default(false)
+  description        String?
+  createdAt          DateTime @default(now())
+
+  defaultQueue Queue?           @relation(fields: [defaultQueueId], references: [id], onDelete: SetNull)
+  policies     PolicyDocument[]
+  tickets      Ticket[]
+
+  @@index([defaultQueueId])
+}
+
+model PolicyDocument {
+  id                String   @id @db.Uuid
+  code              String   @unique
+  title             String
+  categoryId        String   @db.Uuid
+  ownerDepartmentId String?  @db.Uuid
+  summary           String?
+  createdAt         DateTime @default(now())
+
+  category        Category        @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  ownerDepartment Department?     @relation(fields: [ownerDepartmentId], references: [id], onDelete: SetNull)
+  versions        PolicyVersion[]
+
+  @@index([categoryId])
+  @@index([ownerDepartmentId])
+}
+
+model PolicyVersion {
+  id               String       @id @db.Uuid
+  policyDocumentId String       @db.Uuid
+  versionLabel     String
+  status           PolicyStatus @default(ACTIVE)
+  effectiveFrom    DateTime     @db.Date
+  effectiveTo      DateTime?    @db.Date
+  contentMd        String
+  contentHash      String
+  approvedBy       String?
+  approvedAt       DateTime?
+  createdAt        DateTime     @default(now())
+
+  policyDocument PolicyDocument       @relation(fields: [policyDocumentId], references: [id], onDelete: Cascade)
+  audienceRules  PolicyAudienceRule[]
+  chunks         PolicyChunk[]
+  citations      MessageCitation[]
+
+  @@unique([policyDocumentId, versionLabel])
+  @@index([policyDocumentId, effectiveFrom])
+  @@index([status, effectiveFrom, effectiveTo])
+}
+
+model PolicyAudienceRule {
+  id              String            @id @db.Uuid
+  policyVersionId String            @db.Uuid
+  dimension       AudienceDimension
+  value           String
+
+  policyVersion PolicyVersion @relation(fields: [policyVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([policyVersionId, dimension, value])
+  @@index([dimension, value])
+}
+
+model PolicyChunk {
+  id              String @id @db.Uuid
+  policyVersionId String @db.Uuid
+  ordinal         Int
+  heading         String
+  content         String
+  charCount       Int
+
+  policyVersion PolicyVersion     @relation(fields: [policyVersionId], references: [id], onDelete: Cascade)
+  citations     MessageCitation[]
+
+  @@unique([policyVersionId, ordinal])
+  @@index([policyVersionId])
+}
+
+model Ticket {
+  id              String       @id @db.Uuid
+  ticketNo        String       @unique
+  requesterId     String       @db.Uuid
+  assigneeId      String?      @db.Uuid
+  queueId         String       @db.Uuid
+  categoryId      String?      @db.Uuid
+  subject         String
+  description     String
+  status          TicketStatus @default(NEW)
+  priority        Priority     @default(P3)
+  sensitivity     Sensitivity  @default(INTERNAL)
+  isSensitive     Boolean      @default(false)
+  aiIntent        String?
+  aiConfidence    Float?
+  sourceChannel   String       @default("WEB")
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+
+  requester   Employee     @relation("TicketRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  assignee    Employee?    @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  queue       Queue        @relation(fields: [queueId], references: [id], onDelete: Restrict)
+  category    Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  messages    Message[]
+  assignments Assignment[]
+  sla         TicketSla?
+  escalations Escalation[]
+  resolution  Resolution?
+  aiRuns      AiRun[]
+
+  @@index([queueId, status])
+  @@index([assigneeId, status])
+  @@index([requesterId, createdAt])
+  @@index([createdAt])
+  @@index([isSensitive, status])
+}
+
+model Message {
+  id               String            @id @db.Uuid
+  ticketId         String            @db.Uuid
+  senderType       MessageSenderType
+  senderEmployeeId String?           @db.Uuid
+  body             String
+  visibility       MessageVisibility @default(REQUESTER_AND_HR)
+  createdAt        DateTime          @default(now())
+  aiRunId          String?           @db.Uuid
+
+  ticket    Ticket            @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  sender    Employee?         @relation("MessageSender", fields: [senderEmployeeId], references: [id], onDelete: SetNull)
+  citations MessageCitation[]
+  aiRun     AiRun?            @relation(fields: [aiRunId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+  @@index([senderEmployeeId])
+}
+
+model MessageCitation {
+  id              String             @id @db.Uuid
+  messageId       String             @db.Uuid
+  policyVersionId String             @db.Uuid
+  policyChunkId   String             @db.Uuid
+  quote           String
+  rank            Int                @default(1)
+  validated       CitationValidation @default(VALID)
+  validationNote  String?
+  createdAt       DateTime           @default(now())
+
+  message       Message       @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  policyVersion PolicyVersion @relation(fields: [policyVersionId], references: [id], onDelete: Restrict)
+  policyChunk   PolicyChunk   @relation(fields: [policyChunkId], references: [id], onDelete: Restrict)
+
+  @@unique([messageId, policyChunkId])
+  @@index([policyVersionId])
+}
+
+model Assignment {
+  id           String    @id @db.Uuid
+  ticketId     String    @db.Uuid
+  assigneeId   String    @db.Uuid
+  assignedById String?   @db.Uuid
+  queueId      String    @db.Uuid
+  assignedAt   DateTime  @default(now())
+  unassignedAt DateTime?
+  reason       String?
+
+  ticket     Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  assignee   Employee  @relation("AssignmentAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  assignedBy Employee? @relation("AssignmentAssigner", fields: [assignedById], references: [id], onDelete: SetNull)
+  queue      Queue     @relation(fields: [queueId], references: [id], onDelete: Restrict)
+
+  @@index([ticketId, assignedAt])
+  @@index([assigneeId, unassignedAt])
+}
+
+model SlaRule {
+  id                     String   @id @db.Uuid
+  code                   String   @unique
+  priority               Priority
+  firstResponseMinutes   Int
+  resolutionMinutes      Int
+  pauseOnWaitingEmployee Boolean  @default(true)
+  escalationPct          Int      @default(75)
+  isDemoAssumption       Boolean  @default(true)
+  description            String?
+
+  ticketSlas TicketSla[]
+
+  @@index([priority])
+}
+
+model SlaCalendar {
+  id               String  @id @db.Uuid
+  code             String  @unique
+  name             String
+  timezone         String
+  workdays         String
+  startMinute      Int
+  endMinute        Int
+  isDemoAssumption Boolean @default(true)
+
+  holidays   BusinessHoliday[]
+  ticketSlas TicketSla[]
+}
+
+model BusinessHoliday {
+  id         String   @id @db.Uuid
+  calendarId String   @db.Uuid
+  date       DateTime @db.Date
+  name       String
+
+  calendar SlaCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@unique([calendarId, date])
+}
+
+model TicketSla {
+  id                  String    @id @db.Uuid
+  ticketId            String    @unique @db.Uuid
+  ruleId              String    @db.Uuid
+  calendarId          String    @db.Uuid
+  startedAt           DateTime  @default(now())
+  firstResponseDueAt  DateTime
+  resolutionDueAt     DateTime
+  firstRespondedAt    DateTime?
+  resolvedAt          DateTime?
+  state               SlaState  @default(ON_TRACK)
+  pausedAt            DateTime?
+  accumulatedPauseSec Int       @default(0)
+
+  ticket   Ticket      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  rule     SlaRule     @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  calendar SlaCalendar @relation(fields: [calendarId], references: [id], onDelete: Restrict)
+  events   SlaEvent[]
+
+  @@index([state, resolutionDueAt])
+  @@index([firstResponseDueAt])
+}
+
+model SlaEvent {
+  id          String       @id @db.Uuid
+  ticketSlaId String       @db.Uuid
+  type        SlaEventType
+  occurredAt  DateTime     @default(now())
+  note        String?
+
+  ticketSla TicketSla @relation(fields: [ticketSlaId], references: [id], onDelete: Cascade)
+
+  @@index([ticketSlaId, occurredAt])
+}
+
+model Escalation {
+  id            String          @id @db.Uuid
+  ticketId      String          @db.Uuid
+  level         EscalationLevel
+  reason        String
+  escalatedToId String?         @db.Uuid
+  createdAt     DateTime        @default(now())
+  resolvedAt    DateTime?
+
+  ticket      Ticket    @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  escalatedTo Employee? @relation("EscalationTarget", fields: [escalatedToId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+}
+
+model Resolution {
+  id             String         @id @db.Uuid
+  ticketId       String         @unique @db.Uuid
+  resolvedById   String         @db.Uuid
+  summary        String
+  rootCause      String?
+  resolutionType ResolutionType
+  createdAt      DateTime       @default(now())
+
+  ticket     Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  resolvedBy Employee @relation(fields: [resolvedById], references: [id], onDelete: Restrict)
+}
+
+model AiRun {
+  id            String      @id @db.Uuid
+  ticketId      String?     @db.Uuid
+  kind          AiRunKind
+  provider      String
+  model         String
+  promptVersion String
+  inputHash     String
+  outputJson    Json?
+  status        AiRunStatus
+  fallbackUsed  Boolean     @default(false)
+  latencyMs     Int         @default(0)
+  tokensIn      Int?
+  tokensOut     Int?
+  errorMessage  String?
+  createdAt     DateTime    @default(now())
+
+  ticket   Ticket?   @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  messages Message[]
+
+  @@index([ticketId, createdAt])
+  @@index([status])
+}
+
+model AuditEvent {
+  id         String   @id @db.Uuid
+  actorType  String
+  actorId    String?  @db.Uuid
+  action     String
+  entityType String
+  entityId   String
+  beforeJson Json?
+  afterJson  Json?
+  requestId  String?
+  ipHash     String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([action, createdAt])
+  @@index([actorId, createdAt])
+  @@index([createdAt])
+}
