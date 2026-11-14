@@ -29,6 +29,8 @@ npm run dev
 
 A provisioned database is required for login and populated portal views. Demo data is not bundled in this public source snapshot.
 
+For complete setup, database initialization, dataset generation, loading, and troubleshooting, see [Full Setup Guide](docs/setup.md).
+
 ## Validation
 
 ```bash
