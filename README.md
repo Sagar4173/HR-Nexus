@@ -29,15 +29,16 @@ npm run dev
 
 A provisioned database is required for login and populated portal views. Demo data is not bundled in this public source snapshot.
 
-For complete setup, database initialization, dataset generation, loading, and troubleshooting, see [Full Setup Guide](docs/setup.md).
+For full setup, running against a provisioned database, and candidate workspace dataset generation tools, see [Full Setup Guide](docs/setup.md).
 
 ## Validation
 
 ```bash
-npm test
-npx tsc --noEmit
-npm run lint
-npm run build
+npm test          # 56 unit and regression tests across 9 test files
+npx tsc --noEmit  # TypeScript type check
+npm run lint      # ESLint
+npm run build     # Next.js production build
+npm run smoke     # Service-layer smoke test
 ```
 
 ## Project structure

@@ -1,6 +1,6 @@
 # Setup Guide
 
-This guide reproduces the project from a clean clone using **Neon PostgreSQL** as the only database.
+This guide covers running HR Nexus with **Neon PostgreSQL**. Core application workflows, migrations, test suites, and smoke tests run directly from a clean repository clone; dataset generation and seed loading utilities are provided as supplementary tools in the candidate evaluation workspace.
 
 ## 1. Prerequisites
 
@@ -77,7 +77,9 @@ npm run db:check
 
 Expected output lists 21 tables plus the constraints and indexes above.
 
-## 6. Generate the synthetic dataset
+## 6. Generate the synthetic dataset (Evaluation Workspace)
+
+> Note: The synthetic data generation pipeline (`data-pipeline/`) is provided in the candidate evaluation workspace. This step is not required when connecting to an existing provisioned Neon database.
 
 ```bash
 cd data-pipeline
@@ -89,6 +91,7 @@ python -m venv .venv
 pip install -r requirements.txt
 python generate.py
 python validate.py
+cd ..
 ```
 
 Outputs:
@@ -104,15 +107,17 @@ Outputs:
 
 Generation is deterministic: seed `20261114`, Faker `40.54.0`. Two consecutive runs must produce byte-identical files (verify with `Get-FileHash` on Windows or `shasum -a 256` on macOS/Linux).
 
-## 7. Load the database
+## 7. Load the database (Evaluation Workspace)
 
 > [!WARNING]
-> `npm run db:reset` will truncate existing application tables and overwrite database data with the pristine seed. Only run this when restoring the baseline dataset.
+> Database loading will truncate existing application tables and overwrite database data with the pristine seed. Only run this in a development environment when restoring the baseline dataset.
+
+From the candidate evaluation workspace containing `scripts/load-seed.ts` and the generated CSVs:
 
 ```bash
-npm run db:reset    # truncate + COPY load
+npx tsx --env-file=.env.local scripts/load-seed.ts --reset    # truncate + COPY load
 # or, into an empty database:
-npm run db:load
+npx tsx --env-file=.env.local scripts/load-seed.ts
 ```
 
 The loader:
@@ -150,12 +155,14 @@ Accounts are seeded; no password is required. Sessions expire after 12 hours.
 
 ## 9. Verify
 
+### Standard verification (available from clean clone)
+
 ```bash
-npm test                    # 23 unit tests
-npm run eval:golden         # 60/60 golden cases, writes data/reports/golden-evaluation.md
-npm run smoke               # service-layer smoke test (mutates demo data)
-npx tsc --noEmit            # type check
-npm run build               # production build
+npm test                    # 56 unit and regression tests across 9 test files
+npx tsc --noEmit            # type check (0 diagnostics)
+npm run lint                # ESLint (0 errors, 0 warnings)
+npm run build               # production build (13 routes compiled)
+npm run smoke               # service-layer smoke test against live database
 ```
 
 HTTP-level verification:
@@ -167,14 +174,29 @@ npm start -- -p 3100
 node --env-file=.env.local --import tsx scripts/smoke-http.ts
 ```
 
-The HTTP smoke test creates a small number of tickets. Run `npm run db:reset` afterwards to restore the pristine 5,000-ticket dataset.
+The HTTP smoke test creates a small number of demo tickets to verify RBAC boundaries across all roles (30/30 checks).
 
-## 10. Regenerate from scratch
+### Supplementary evaluation workspace verification
+
+When evaluating from the complete candidate workspace:
 
 ```bash
-npm run db:reset
-python data-pipeline/validate.py
-npm run eval:golden
+npx tsx --env-file=.env.local scripts/evaluate-golden.ts  # 60/60 golden cases, writes data/reports/golden-evaluation.md
+```
+
+## 10. Candidate workspace reproduction workflow
+
+When reproducing the complete dataset from scratch in the evaluation workspace (containing `data-pipeline/` and supplementary scripts):
+
+```bash
+# 1. Regenerate synthetic CSVs and validate invariants
+cd data-pipeline && python generate.py && python validate.py && cd ..
+
+# 2. Reset and load Neon database
+npx tsx --env-file=.env.local scripts/load-seed.ts --reset
+
+# 3. Run golden evaluation and test suite
+npx tsx --env-file=.env.local scripts/evaluate-golden.ts
 npm test
 npm run build
 ```
@@ -205,7 +227,7 @@ cd data-pipeline && python generate.py
 
 ### `AuditEvent` rows cannot be deleted
 
-That is the append-only trigger working as designed. Use `npm run db:reset`, which truncates tables rather than deleting rows.
+That is the append-only trigger working as designed. Truncate tables via the loader script (`scripts/load-seed.ts --reset`) rather than deleting rows directly.
 
 ### HTTP smoke test cannot authenticate
 
